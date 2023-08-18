@@ -55,13 +55,55 @@ if(OPENCL_SDK_BUILD_SAMPLES)
 endif()
 
 include(GNUInstallDirs)
+
+# Generate targets file with targets from the other libraries
+# file(
+#   WRITE ${PROJECT_BINARY_DIR}/OpenCL/OpenCLTargets.cmake
+#   [[
+# find_package(OpenCLHeaders)
+# find_package(OpenCLHeadersCpp)
+# find_package(OpenCLICDLoader)
+# find_package(OpenCLUtils)
+# find_package(OpenCLUtilsCpp)
+
+# get_filename_component(HEADERS_PARENT_DIR ${OpenCLHeaders_CONFIG} PATH)
+# get_filename_component(HEADERSCPP_PARENT_DIR ${OpenCLHeadersCpp_CONFIG} PATH)
+# get_filename_component(ICDLOADER_PARENT_DIR ${OpenCLICDLoader_CONFIG} PATH)
+# get_filename_component(PARENT_DIR ${CMAKE_CURRENT_LIST_DIR} PATH)
+
+# include("${HEADERS_PARENT_DIR}/OpenCLHeadersTargets.cmake")
+# include("${HEADERSCPP_PARENT_DIR}/OpenCLHeadersCppTargets.cmake")
+# include("${ICDLOADER_PARENT_DIR}/OpenCLICDLoaderTargets.cmake")
+# include("${PARENT_DIR}/OpenCLUtils/OpenCLUtilsTargets.cmake")
+# include("${PARENT_DIR}/OpenCLUtilsCpp/OpenCLUtilsCppTargets.cmake")
+#   ]]
+# )
+# install(
+#   FILES ${PROJECT_BINARY_DIR}/OpenCL/OpenCLTargets.cmake
+#   DESTINATION ${config_package_location}
+#   COMPONENT binary
+# )
+# file(
+#   WRITE ${PROJECT_BINARY_DIR}/OpenCL/OpenCLConfig.cmake
+#   [[
+# get_filename_component(PARENT_DIR ${CMAKE_CURRENT_LIST_DIR} PATH)
+# include("${PARENT_DIR}/OpenCLHeaders/OpenCLHeadersConfig.cmake")
+# include("${PARENT_DIR}/OpenCLICDLoader/OpenCLICDLoaderConfig.cmake")
+# include("${PARENT_DIR}/OpenCLHeadersCpp/OpenCLHeadersCppConfig.cmake")
+# include("${PARENT_DIR}/OpenCLUtils/OpenCLUtilsConfig.cmake")
+# include("${PARENT_DIR}/OpenCLUtilsCpp/OpenCLUtilsCppConfig.cmake")
+#   ]]
+# )
 file(
   WRITE ${PROJECT_BINARY_DIR}/OpenCL/OpenCLConfig.cmake
   [[
+find_package(OpenCLHeaders)
+find_package(OpenCLHeadersCpp)
+find_package(OpenCLICDLoader)
 get_filename_component(PARENT_DIR ${CMAKE_CURRENT_LIST_DIR} PATH)
-include("${PARENT_DIR}/OpenCLHeaders/OpenCLHeadersConfig.cmake")
-include("${PARENT_DIR}/OpenCLICDLoader/OpenCLICDLoaderConfig.cmake")
-include("${PARENT_DIR}/OpenCLHeadersCpp/OpenCLHeadersCppConfig.cmake")
+include("${OpenCLHeaders_CONFIG}")
+include("${OpenCLICDLoader_CONFIG}")
+include("${OpenCLHeadersCpp_CONFIG}")
 include("${PARENT_DIR}/OpenCLUtils/OpenCLUtilsConfig.cmake")
 include("${PARENT_DIR}/OpenCLUtilsCpp/OpenCLUtilsCppConfig.cmake")
   ]]
@@ -70,6 +112,7 @@ set(config_package_location ${CMAKE_INSTALL_DATADIR}/cmake/OpenCL)
 install(
   FILES ${PROJECT_BINARY_DIR}/OpenCL/OpenCLConfig.cmake
   DESTINATION ${config_package_location}
+  COMPONENT binary
 )
 
 unset(CMAKE_SIZEOF_VOID_P)
@@ -82,6 +125,7 @@ write_basic_package_version_file(
 install(
   FILES ${CMAKE_CURRENT_BINARY_DIR}/OpenCL/OpenCLConfigVersion.cmake
   DESTINATION ${config_package_location}
+  COMPONENT binary
 )
 
 include(CPack)
