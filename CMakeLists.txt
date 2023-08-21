@@ -26,10 +26,11 @@ include(CMakeDependentOption)
 option(OPENCL_SDK_BUILD_SAMPLES "Build sample code" ON)
 cmake_dependent_option(OPENCL_SDK_BUILD_OPENGL_SAMPLES "Build OpenCL-OpenGL interop sample code" ON OPENCL_SDK_BUILD_SAMPLES OFF)
 cmake_dependent_option(OPENCL_SDK_TEST_SAMPLES "Add CTest to samples (where applicable)" ON OPENCL_SDK_BUILD_SAMPLES OFF)
+option(OPENCL_SDK_DEB_BUILD "Build SDK for DEB generation" OFF)
 
 include(CTest)
 
-if (NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "No build type selected, default to Release")
     set(CMAKE_BUILD_TYPE "Release" CACHE PATH "Build Type" FORCE)
 endif()
@@ -38,9 +39,15 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${PROJECT_SOURCE_DIR}/install" CACHE PATH "Install Path" FORCE)
 endif()
 
-add_subdirectory(external/OpenCL-Headers)
-add_subdirectory(external/OpenCL-ICD-Loader)
-add_subdirectory(external/OpenCL-CLHPP)
+if(OPENCL_SDK_DEB_BUILD)
+    find_package(OpenCLHeaders)
+    find_package(OpenCLICDLoader)
+    find_package(OpenCLHeadersCpp)
+else()
+    add_subdirectory(external/OpenCL-Headers)
+    add_subdirectory(external/OpenCL-ICD-Loader)
+    add_subdirectory(external/OpenCL-CLHPP)
+endif()
 
 list(APPEND CMAKE_MODULE_PATH
   ${PROJECT_SOURCE_DIR}/cmake
