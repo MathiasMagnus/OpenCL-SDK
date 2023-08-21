@@ -223,6 +223,7 @@ jobs:
           mkdir $GITHUB_WORKSPACE/build_package &&
           cd $GITHUB_WORKSPACE/build_package &&
           $CMAKE_EXE
+          --debug-find
           -G "${{matrix.CONF.GEN}}"
           `if [[ "${{matrix.CONF.GEN}}" == "Unix Makefiles" ]]; then echo "-D CMAKE_BUILD_TYPE=${{matrix.CONF.CONFIG}}"; fi`
           $GITHUB_WORKSPACE/test/cmake/pkgconfig/useutil &&
