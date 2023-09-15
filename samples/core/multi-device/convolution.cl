@@ -14,33 +14,46 @@
  * limitations under the License.
  */
 
-kernel void convolution_3x3(
-    global float* in,
-    global float* out,
-    global float* mask,
-    unsigned long x_dim,
-    unsigned long y_dim)
+kernel void convolution_3x3(const global float* in, global float* out,
+                            const global float* mask, const unsigned long x_dim,
+                            const unsigned long y_dim)
 {
     const uint mask_dim = 3;
-    const size_t x = get_global_id(0) + 1;
-    const size_t y = get_global_id(1) + 1;
+    const uint pad_width = mask_dim / 2;
 
-    if(!(x < (x_dim - 1) && y < (y_dim - 1))){
+    const size_t x = get_global_id(0);
+    const size_t y = get_global_id(1);
+
+    // Padded constants.
+    const size_t pad_x_dim = x_dim + 2 * pad_width;
+    const size_t pad_y_dim = y_dim + 2 * pad_width;
+
+    // Check possible out of bounds.
+    if (!(x < x_dim && y < y_dim))
+    {
         return;
     }
 
+    // Perform convolution. Fix one column at a time and iterate over each
+    // element of it, as data is stored column-major.
     float result = 0.0f;
     #if __OPENCL_C_VERSION__ >= 200
     __attribute__((opencl_unroll_hint))
     #endif
-    for(size_t grid_column = x - 1, mask_column = 0; mask_column < mask_dim; ++grid_column, ++mask_column){
+    for (size_t grid_column = x, mask_column = 0; mask_column < mask_dim;
+         ++grid_column, ++mask_column)
+    {
         #if __OPENCL_C_VERSION__ >= 200
         __attribute__((opencl_unroll_hint))
         #endif
-        for(size_t grid_row = y - 1, mask_row = 0; mask_row < mask_dim; ++grid_row, ++mask_row){
-            result += mask[mask_column + mask_row * mask_dim] * in[grid_column + grid_row * x_dim];
+        for (size_t grid_row = y, mask_row = 0; mask_row < mask_dim;
+             ++grid_row, ++mask_row)
+        {
+            result += mask[mask_column + mask_row * mask_dim]
+                * in[grid_column + grid_row * pad_x_dim];
         }
     }
 
+    // Write result to correspoding output cell.
     out[x + y * x_dim] = result;
 }
