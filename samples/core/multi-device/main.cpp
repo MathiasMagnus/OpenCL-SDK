@@ -14,26 +14,36 @@
  * limitations under the License.
  */
 
-// OpenCL includes
-#include <CL/Utils/Error.h>
-#include <CL/Utils/Utils.hpp>
+// OpenCL SDK includes.
 #include <CL/SDK/CLI.hpp>
 #include <CL/SDK/Context.hpp>
 #include <CL/SDK/Options.hpp>
 #include <CL/SDK/Random.hpp>
 
-// TCLAP includes
+// OpenCL Utils includes.
+#include <CL/Utils/Error.hpp>
+#include <CL/Utils/Event.hpp>
+#include <CL/Utils/Utils.hpp>
+
+// TCLAP includes.
 #include <tclap/CmdLine.h>
 
-// Std library includes
+// Standard header includes.
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <math.h>
+#include <memory>
 #include <random>
-#include <tuple> // std::make_tuple
-#include <valarray>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <vector>
 
-// Sample-specific options
+// Sample-specific options.
 struct ConvolutionOptions
 {
     size_t x_dim;
@@ -58,7 +68,7 @@ ConvolutionOptions cl::sdk::comprehend<ConvolutionOptions>(
     return ConvolutionOptions{ x_dim_arg->getValue(), y_dim_arg->getValue() };
 }
 
-// Add option to CLI parsing SDK utility for device type.
+// Add option to CLI parsing SDK utility for multi-device type.
 template <> auto cl::sdk::parse<cl::sdk::options::MultiDevice>()
 {
     std::vector<std::string> valid_dev_strings{ "all", "cpu", "gpu",
@@ -67,9 +77,9 @@ template <> auto cl::sdk::parse<cl::sdk::options::MultiDevice>()
         std::make_unique<TCLAP::ValuesConstraint<std::string>>(
             valid_dev_strings);
 
-    return std::make_shared<TCLAP::ValueArg<std::string>>(
-        "t", "type", "Type of device to use", false, "def",
-        valid_dev_constraint.get());
+    return std::make_tuple(std::make_shared<TCLAP::ValueArg<std::string>>(
+        "t", "type", "Type of device to use", false, "all",
+        valid_dev_constraint.get()));
 }
 template <>
 cl::sdk::options::MultiDevice
@@ -93,29 +103,30 @@ cl::sdk::comprehend<cl::sdk::options::MultiDevice>(
             throw std::logic_error{ "Unkown device type after CLI parse." };
     }(type_arg->getValue());
 
-    cl::sdk::options::MultiDevice devices;
     std::vector<cl::Platform> platforms;
     cl::Platform::get(&platforms);
     cl::sdk::options::MultiDevice devices;
-    for (cl::Platform platform : platforms)
+
+    // Get number of platforms.
+    cl_uint num_platforms = 0;
+    clGetPlatformIDs(0, nullptr, &num_platforms);
+
+    // Register triplets {platform, device, device_type} for each device in each
+    // platform.
+    for (cl_uint platform_id = 0; platform_id < num_platforms; ++platform_id)
     {
+        // Get devices IDs.
+        cl::Platform platform = platforms[platform_id];
         std::vector<cl::Device> platform_devices;
         platform.getDevices(device_type, &platform_devices);
-        for (cl::Device device : platform_devices)
+
+        // Register triplets.
+        for (cl_uint device_id = 0; device_id < platform_devices.size();
+             ++device_id)
         {
-            if (devices.triplets.size() < 2)
-            {
-                cl::sdk::options::DeviceTriplet{ platform, device,
-                                                 device_type };
-                devices.triplets.push_back({ platform, device, device_type });
-            }
+            devices.triplets.push_back(cl::sdk::options::DeviceTriplet{
+                platform_id, device_id, device_type });
         }
-    }
-    if (devices.triplets.size() < 2)
-    {
-        std::cerr << "Error: Not enough OpenCL devices of type "
-            < < < < " found" << std::endl;
-        return NULL;
     }
 
     return devices;
@@ -123,17 +134,17 @@ cl::sdk::comprehend<cl::sdk::options::MultiDevice>(
 
 // Host-side implementation of the convolution for verification. Padded input
 // assumed.
-constexpr uint mask_dim = 3;
-const uint pad_width = mask_dim / 2;
 void host_convolution(std::vector<cl_float> in, std::vector<cl_float>& out,
                       std::vector<cl_float> mask, size_t x_dim, size_t y_dim)
 {
+    constexpr cl_uint mask_dim = 3;
+    constexpr cl_uint pad_width = mask_dim / 2;
     const size_t pad_x_dim = x_dim + 2 * pad_width;
     for (size_t x = 0; x < x_dim; ++x)
     {
         for (size_t y = 0; y < y_dim; ++y)
         {
-            float result = 0.0;
+            float result = 0.f;
             for (size_t grid_column = x, mask_column = 0;
                  mask_column < mask_dim; ++grid_column, ++mask_column)
             {
@@ -153,43 +164,34 @@ int main(int argc, char* argv[])
 {
     try
     {
+        // Parse command-line options.
+        auto opts = cl::sdk::parse_cli<cl::sdk::options::Diagnostic,
+                                       cl::sdk::options::MultiDevice,
+                                       ConvolutionOptions>(argc, argv);
+        const auto& diag_opts = std::get<0>(opts);
+        const auto& devs_opts = std::get<1>(opts);
+        const auto& conv_opts = std::get<2>(opts);
+
         // Check availability of OpenCL devices.
-        std::vector<cl::Platform> platforms;
-        cl::Platform::get(&platforms);
-        std::vector<cl::Device> devices;
-        for (size_t i = 0; i < platforms.size(); ++i)
-        {
-            std::vector<cl::Device> platform_devices;
-            platforms[i].getDevices(CL_DEVICE_TYPE_ALL, &platform_devices);
-            for (size_t j = 0; j < platform_devices.size(); ++j)
-            {
-                devices.push_back(platform_devices[j]);
-            }
-        }
+        std::vector<cl::sdk::options::DeviceTriplet> triplets =
+            devs_opts.triplets;
 
-        // Improvement: use only a specific type of device suitable for the
-        // task.
-
-        if (!devices.size())
+        if (!triplets.size())
         {
             std::cerr << "Error: No OpenCL devices available" << std::endl;
             return -1;
         }
-
-        // Parse command-line options.
-        auto opts = cl::sdk::parse_cli<cl::sdk::options::Diagnostic,
-                                       cl::sdk::options::SingleDevice,
-                                       // cl::sdk::options::SingleDevice,
-                                       ConvolutionOptions>(argc, argv);
-        const auto& diag_opts = std::get<0>(opts);
-        const auto& dev1_opts = std::get<1>(opts);
-        // const auto& dev2_opts = std::get<1>(opts);
-        const auto& conv_opts = std::get<2>(opts);
+        else if (triplets.size() < 2)
+        {
+            std::cout << "Not enough OpenCL devices available for "
+                         "multi-device. Using only one device."
+                      << std::endl;
+        }
 
         // Create runtime objects based on user preference or default.
-        cl::Context context1 = cl::sdk::get_context(dev1_opts.triplet);
-        // cl::Context context2 = cl::sdk::get_context(dev2_opts.triplet);
-        cl::Context context2 = context1;
+        cl::Context context1 = cl::sdk::get_context(triplets.at(0));
+        cl::Context context2 =
+            cl::sdk::get_context(triplets.at((triplets.size() >= 2)));
         cl::Device dev1 = context1.getInfo<CL_CONTEXT_DEVICES>().at(0);
         cl::Device dev2 = context2.getInfo<CL_CONTEXT_DEVICES>().at(0);
         cl::Platform platform1{
@@ -229,6 +231,10 @@ int main(int argc, char* argv[])
                               std::string{ std::istreambuf_iterator<char>{
                                                kernel_stream },
                                            std::istreambuf_iterator<char>{} } };
+        // Clear error state flags and reset read position to the beginning of
+        // the .cl file before creating the second program.
+        kernel_stream.clear();
+        kernel_stream.seekg(0, kernel_stream.beg);
         cl::Program program2{ context2,
                               std::string{ std::istreambuf_iterator<char>{
                                                kernel_stream },
@@ -244,27 +250,46 @@ int main(int argc, char* argv[])
             + cl::string{ d1_highest_device_opencl_c_is_3_x ? "-cl-std=CL3.0 "
                                                             : "" };
         program1.build(dev1, compiler_options.c_str());
-
-        auto convolution =
-            cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
-                              cl_ulong>(program1, "convolution_3x3");
+        program2.build(dev2, compiler_options.c_str());
 
         // Query maximum workgroup size (WGS) of kernel supported on each device
         // based on private mem (registers) constraints.
-        cl::Kernel reduce_kernel = convolution.getKernel();
-        auto wgs1 =
-            convolution.getKernel().getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(
-                dev1);
-        auto wgs2 =
-            convolution.getKernel().getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(
-                dev2);
+        auto convolution1 =
+            cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
+                              cl_ulong>(program1, "convolution_3x3");
+        auto convolution2 =
+            cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
+                              cl_ulong>(program2, "convolution_3x3");
+        auto wgs1 = convolution1.getKernel()
+                        .getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(dev1);
+        auto wgs2 = convolution2.getKernel()
+                        .getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(dev2);
 
         // Initialize host-side storage.
+        constexpr cl_uint mask_dim = 3;
+        constexpr cl_uint pad_width = mask_dim / 2;
         const size_t x_dim = conv_opts.x_dim;
         const size_t y_dim = conv_opts.y_dim;
         const size_t pad_x_dim = x_dim + 2 * pad_width;
         const size_t pad_y_dim = y_dim + 2 * pad_width;
 
+        // Check that the WGSs can divide the global size (MacOS reports
+        // CL_INVALID_WORK_GROUP_SIZE otherwise). If WGS is smaller than the x
+        // dimension, then a NULL pointer will be used when initialising
+        // cl::EnqueueArgs for enqueuing the kernels.
+        if (pad_x_dim % wgs1 && pad_x_dim > wgs1)
+        {
+            size_t div = pad_x_dim / wgs1;
+            wgs1 = sqrt(div * wgs1);
+        }
+
+        if (pad_x_dim % wgs2 && pad_x_dim > wgs2)
+        {
+            size_t div = pad_x_dim / wgs2;
+            wgs2 = sqrt(div * wgs2);
+        }
+
+        // Random number generator.
         auto prng = [engine = std::default_random_engine{},
                      dist = std::uniform_real_distribution<cl_float>{
                          -1.0, 1.0 }]() mutable { return dist(engine); };
@@ -281,8 +306,7 @@ int main(int argc, char* argv[])
         }
         cl::sdk::fill_with_random(prng, h_input_grid);
 
-        // Fill with 0s the extra rows and columns added for padding the input
-        // matrix.
+        // Fill with 0s the extra rows and columns added for padding.
         for (size_t j = 0; j < pad_x_dim; ++j)
         {
             for (size_t i = 0; i < pad_y_dim; ++i)
@@ -308,7 +332,8 @@ int main(int argc, char* argv[])
         cl::sdk::fill_with_random(prng, h_mask);
 
         // Initialize device-side storage.
-        const size_t grid_midpoint = pad_y_dim / 2;
+        const size_t grid_midpoint = y_dim / 2;
+        const size_t pad_grid_midpoint = pad_y_dim / 2;
 
         if (diag_opts.verbose)
         {
@@ -326,22 +351,21 @@ int main(int argc, char* argv[])
         // border included).
         cl::Buffer dev1_input_grid(
             queue1, h_input_grid.begin(),
-            h_input_grid.begin() + pad_x_dim * (grid_midpoint + 1), false);
+            h_input_grid.begin() + pad_x_dim * (pad_grid_midpoint + 1), false);
 
         // Second device performs the convolution in the lower half (middle
         // border included).
-        cl::Buffer dev2_input_grid{ queue2,
-                                    h_input_grid.begin()
-                                        + pad_x_dim * (grid_midpoint - 1),
-                                    h_input_grid.end(), false };
+        cl::Buffer dev2_input_grid(
+            queue2, h_input_grid.begin() + pad_x_dim * (pad_grid_midpoint - 1),
+            h_input_grid.end(), false);
 
         cl::Buffer dev1_output_grid(queue1, h_output_grid.begin(),
                                     h_output_grid.end(), false);
         cl::Buffer dev2_output_grid(queue2, h_output_grid.begin(),
                                     h_output_grid.end(), false);
 
-        cl::Buffer d1_mask{ queue1, h_mask.begin(), h_mask.end(), false };
-        cl::Buffer d2_mask{ queue2, h_mask.begin(), h_mask.end(), false };
+        cl::Buffer dev1_mask{ queue1, h_mask.begin(), h_mask.end(), false };
+        cl::Buffer dev2_mask{ queue2, h_mask.begin(), h_mask.end(), false };
 
         // Launch kernels.
         if (diag_opts.verbose)
@@ -355,18 +379,25 @@ int main(int argc, char* argv[])
         const cl::NDRange local1{ wgs1, 1 };
         const cl::NDRange local2{ wgs2, 1 };
 
-        std::vector<cl::Event> kernel_run;
+        // Enqueue kernel calls and wait for them to finish.
+        std::vector<cl::Event> dev1_kernel_runs;
+        std::vector<cl::Event> dev2_kernel_runs;
         auto dev_start = std::chrono::high_resolution_clock::now();
 
-        // Enqueue kernel calls and wait for them to finish.
-        kernel_run.push_back(convolution(
-            cl::EnqueueArgs{ queue1, global, local1 }, dev1_input_grid,
-            dev1_output_grid, d1_mask, x_dim, y_dim));
-        kernel_run.push_back(convolution(
-            cl::EnqueueArgs{ queue2, global, local2 }, dev2_input_grid,
-            dev2_output_grid, d2_mask, x_dim, y_dim));
+        dev1_kernel_runs.push_back(convolution1(
+            cl::EnqueueArgs{ queue1, global,
+                             (pad_x_dim < wgs1) ? cl::NullRange : local1 },
+            dev1_input_grid, dev1_output_grid, dev1_mask, x_dim,
+            grid_midpoint));
+        dev2_kernel_runs.push_back(convolution2(
+            cl::EnqueueArgs{ queue2, global,
+                             (pad_x_dim < wgs2) ? cl::NullRange : local2 },
+            dev2_input_grid, dev2_output_grid, dev2_mask, x_dim,
+            grid_midpoint));
 
-        cl::WaitForEvents(kernel_run);
+        cl::WaitForEvents(dev1_kernel_runs);
+        cl::WaitForEvents(dev2_kernel_runs);
+
         auto dev_end = std::chrono::high_resolution_clock::now();
 
         // Compute reference host-side convolution.
@@ -386,13 +417,13 @@ int main(int argc, char* argv[])
         // Fetch and combine results from devices.
         std::vector<cl_float> concatenated_results(x_dim * y_dim);
         cl::copy(queue1, dev1_output_grid, concatenated_results.begin(),
-                 concatenated_results.begin() + x_dim * (y_dim / 2));
+                 concatenated_results.begin() + x_dim * grid_midpoint);
         cl::copy(queue2, dev2_output_grid,
-                 concatenated_results.begin() + x_dim * (y_dim / 2),
+                 concatenated_results.begin() + x_dim * grid_midpoint,
                  concatenated_results.end());
 
         // Validate device-side solution.
-        cl_float deviation = 0.0;
+        cl_float deviation = 0.f;
         const cl_float tolerance = 1e-6;
 
         for (size_t i = 0; i < concatenated_results.size(); ++i)
@@ -415,14 +446,22 @@ int main(int argc, char* argv[])
 
         if (!diag_opts.quiet)
         {
-            std::cout << "Kernels execution time as measured by host: "
+            std::cout << "Kernels execution time as seen by host: "
                       << std::chrono::duration_cast<std::chrono::microseconds>(
                              dev_end - dev_start)
                              .count()
                       << " us." << std::endl;
             std::cout << "Kernels execution time as measured by devices: "
                       << std::endl;
-            for (auto& pass : kernel_run)
+            for (auto& pass : dev1_kernel_runs)
+                std::cout << "  - "
+                          << cl::util::get_duration<CL_PROFILING_COMMAND_START,
+                                                    CL_PROFILING_COMMAND_END,
+                                                    std::chrono::microseconds>(
+                                 pass)
+                                 .count()
+                          << " us." << std::endl;
+            for (auto& pass : dev2_kernel_runs)
                 std::cout << "  - "
                           << cl::util::get_duration<CL_PROFILING_COMMAND_START,
                                                     CL_PROFILING_COMMAND_END,
