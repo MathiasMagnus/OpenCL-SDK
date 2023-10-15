@@ -17,14 +17,14 @@ In this implementation of the convolution kernel we assume that the input matrix
 
 ## Application flow
 ### Overview
-By default the application will select whichever two devices are first found in the first platform available. A command-line option is added though, so the user can specify which type of device is preferable to be used (e.g. "cpu" or "gpu").
+By default the application will select whichever two devices are first found in the platform with most devices available. A command-line option is added though, so the user can specify which type of device is preferable to be used (e.g. "cpu" or "gpu").
 
 A random input matrix and mask are generated and the workload is equally divided between both devices: one of them performs the convolution over the left half of the matrix and the other one does the same with the right half. When both devices finish the execution of the kernel, the results are fetched and combined by the host.
 
 ### Device selection
 As mentioned above, by default the first two devices of any type found will be the ones to be used. If there is only one device available, a single-device convolution will be performed.
 
-If the user specifies a type of device to be used, the program iterates over all the devices available from any platform and selects the first two devices of that type found. Note that they do not necessarily belong to the same platform.
+If the user specifies a type of device to be used, the program iterates over all the devices available and selects the first two devices of that type found from the platform with most devices of that type available. If there are not enough devices (i.e. there is no more that one device of that type in any of the platforms) then the example will run as a single-device program.
 
 ### Kernel launch
 The rest of the program does not differ much from the usual single-device kernel launch. The only difference is that each device will need a separate set of runtime objects to be created: context, program, command queue, kernel functor, input/mask/output buffers and so on. Note that the input buffers will also contain different data in them, because the first device selected performs the convolution over the left half of the matrix while the second device calculates the convolution over the right half of it.

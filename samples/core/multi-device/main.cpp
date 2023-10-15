@@ -55,10 +55,10 @@ template <> auto cl::sdk::parse<ConvolutionOptions>()
 {
     return std::make_tuple(std::make_shared<TCLAP::ValueArg<size_t>>(
                                "x", "x_dim", "x dimension of input", false,
-                               4'000, "positive integral"),
+                               4'096, "positive integral"),
                            std::make_shared<TCLAP::ValueArg<size_t>>(
                                "y", "y_dim", "y dimension of input", false,
-                               4'000, "positive integral"));
+                               4'096, "positive integral"));
 }
 template <>
 ConvolutionOptions cl::sdk::comprehend<ConvolutionOptions>(
@@ -68,74 +68,12 @@ ConvolutionOptions cl::sdk::comprehend<ConvolutionOptions>(
     return ConvolutionOptions{ x_dim_arg->getValue(), y_dim_arg->getValue() };
 }
 
-// Add option to CLI parsing SDK utility for multi-device type.
-template <> auto cl::sdk::parse<cl::sdk::options::MultiDevice>()
-{
-    std::vector<std::string> valid_dev_strings{ "all", "cpu", "gpu",
-                                                "acc", "cus", "def" };
-    valid_dev_constraint =
-        std::make_unique<TCLAP::ValuesConstraint<std::string>>(
-            valid_dev_strings);
-
-    return std::make_tuple(std::make_shared<TCLAP::ValueArg<std::string>>(
-        "t", "type", "Type of device to use", false, "all",
-        valid_dev_constraint.get()));
-}
-template <>
-cl::sdk::options::MultiDevice
-cl::sdk::comprehend<cl::sdk::options::MultiDevice>(
-    std::shared_ptr<TCLAP::ValueArg<std::string>> type_arg)
-{
-    cl_device_type device_type = [](std::string in) -> cl_device_type {
-        if (in == "all")
-            return CL_DEVICE_TYPE_ALL;
-        else if (in == "cpu")
-            return CL_DEVICE_TYPE_CPU;
-        else if (in == "gpu")
-            return CL_DEVICE_TYPE_GPU;
-        else if (in == "acc")
-            return CL_DEVICE_TYPE_ACCELERATOR;
-        else if (in == "cus")
-            return CL_DEVICE_TYPE_CUSTOM;
-        else if (in == "def")
-            return CL_DEVICE_TYPE_DEFAULT;
-        else
-            throw std::logic_error{ "Unkown device type after CLI parse." };
-    }(type_arg->getValue());
-
-    std::vector<cl::Platform> platforms;
-    cl::Platform::get(&platforms);
-    cl::sdk::options::MultiDevice devices;
-
-    // Get number of platforms.
-    cl_uint num_platforms = 0;
-    clGetPlatformIDs(0, nullptr, &num_platforms);
-
-    // Register triplets {platform, device, device_type} for each device in each
-    // platform.
-    for (cl_uint platform_id = 0; platform_id < num_platforms; ++platform_id)
-    {
-        // Get devices IDs.
-        cl::Platform platform = platforms[platform_id];
-        std::vector<cl::Device> platform_devices;
-        platform.getDevices(device_type, &platform_devices);
-
-        // Register triplets.
-        for (cl_uint device_id = 0; device_id < platform_devices.size();
-             ++device_id)
-        {
-            devices.triplets.push_back(cl::sdk::options::DeviceTriplet{
-                platform_id, device_id, device_type });
-        }
-    }
-
-    return devices;
-}
-
 // Host-side implementation of the convolution for verification. Padded input
 // assumed.
-void host_convolution(std::vector<cl_float> in, std::vector<cl_float>& out,
-                      std::vector<cl_float> mask, size_t x_dim, size_t y_dim)
+void host_convolution(const std::vector<cl_float> in,
+                      std::vector<cl_float>& out,
+                      const std::vector<cl_float> mask, const size_t x_dim,
+                      const size_t y_dim)
 {
     constexpr cl_uint mask_dim = 3;
     constexpr cl_uint pad_width = mask_dim / 2;
@@ -166,60 +104,61 @@ int main(int argc, char* argv[])
     {
         // Parse command-line options.
         auto opts = cl::sdk::parse_cli<cl::sdk::options::Diagnostic,
-                                       cl::sdk::options::MultiDevice,
+                                       cl::sdk::options::SingleDevice,
                                        ConvolutionOptions>(argc, argv);
         const auto& diag_opts = std::get<0>(opts);
-        const auto& devs_opts = std::get<1>(opts);
+        const auto& dev_opts = std::get<1>(opts);
         const auto& conv_opts = std::get<2>(opts);
 
-        // Check availability of OpenCL devices.
-        std::vector<cl::sdk::options::DeviceTriplet> triplets =
-            devs_opts.triplets;
-
-        if (!triplets.size())
-        {
-            std::cerr << "Error: No OpenCL devices available" << std::endl;
-            return -1;
-        }
-        else if (triplets.size() < 2)
-        {
-            std::cout << "Not enough OpenCL devices available for "
-                         "multi-device. Using only one device."
-                      << std::endl;
-        }
-
         // Create runtime objects based on user preference or default.
-        cl::Context context1 = cl::sdk::get_context(triplets.at(0));
-        cl::Context context2 =
-            cl::sdk::get_context(triplets.at((triplets.size() >= 2)));
-        cl::Device dev1 = context1.getInfo<CL_CONTEXT_DEVICES>().at(0);
-        cl::Device dev2 = context2.getInfo<CL_CONTEXT_DEVICES>().at(0);
-        cl::Platform platform1{
-            dev1.getInfo<CL_DEVICE_PLATFORM>()
+        cl::Device dev = cl::sdk::get_context(dev_opts.triplet)
+                             .getInfo<CL_CONTEXT_DEVICES>()
+                             .at(0);
+
+        cl::Platform platform{
+            dev.getInfo<CL_DEVICE_PLATFORM>()
         }; // https://github.com/KhronosGroup/OpenCL-CLHPP/issues/150
-        cl::Platform platform2{ dev2.getInfo<CL_DEVICE_PLATFORM>() };
 
         if (!diag_opts.quiet)
         {
-            std::cout << "First selected device: "
-                      << dev1.getInfo<CL_DEVICE_NAME>() << "\n"
-                      << "Using " << platform1.getInfo<CL_PLATFORM_VENDOR>()
-                      << " platform\n"
-                      << std::endl;
-            std::cout << "\nSecond selected device: "
-                      << dev2.getInfo<CL_DEVICE_NAME>() << "\n"
-                      << "Using " << platform2.getInfo<CL_PLATFORM_VENDOR>()
+            std::cout << "Selected device: " << dev.getInfo<CL_DEVICE_NAME>()
+                      << "\n"
+                      << "from " << platform.getInfo<CL_PLATFORM_VENDOR>()
                       << " platform\n"
                       << std::endl;
         }
 
-        // Query device and runtime capabilities.
-        auto d1_highest_device_opencl_c_is_2_x =
-            cl::util::opencl_c_version_contains(dev1, "2.");
-        auto d1_highest_device_opencl_c_is_3_x =
-            cl::util::opencl_c_version_contains(dev1, "3.");
+        if (diag_opts.verbose)
+        {
+            std::cout << "Creating sub-devices...";
+            std::cout.flush();
+        }
 
-        // Compile kernel.
+#if CL_HPP_TARGET_OPENCL_VERSION < 120
+        std::cerr
+            << "Error: OpenCL subdevices not supported before version 1.2 "
+            << std::endl;
+        exit(EXIT_FAILURE);
+#endif
+
+        // Create subdevices, each with half of the compute units available.
+        cl_uint max_compute_units = dev.getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+        cl_device_partition_property subdevices_properties[] = {
+            (cl_device_partition_property)CL_DEVICE_PARTITION_EQUALLY,
+            (cl_device_partition_property)max_compute_units / 2, 0
+        };
+        std::vector<cl::Device> subdevices{};
+        dev.createSubDevices(subdevices_properties, &subdevices);
+
+        if (subdevices.size() < 2)
+        {
+            std::cerr << "Error: OpenCL cannot create subdevices" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        cl::Context context(subdevices);
+
+        // Read kernel file.
         const char* kernel_location = "./convolution.cl";
         std::ifstream kernel_stream{ kernel_location };
         if (!kernel_stream.is_open())
@@ -227,43 +166,36 @@ int main(int argc, char* argv[])
                 std::string{ "Cannot open kernel source: " } + kernel_location
             };
 
-        cl::Program program1{ context1,
-                              std::string{ std::istreambuf_iterator<char>{
-                                               kernel_stream },
-                                           std::istreambuf_iterator<char>{} } };
-        // Clear error state flags and reset read position to the beginning of
-        // the .cl file before creating the second program.
-        kernel_stream.clear();
-        kernel_stream.seekg(0, kernel_stream.beg);
-        cl::Program program2{ context2,
-                              std::string{ std::istreambuf_iterator<char>{
-                                               kernel_stream },
-                                           std::istreambuf_iterator<char>{} } };
+        // Compile kernel.
+        if (diag_opts.verbose)
+        {
+            std::cout << "done.\nCompiling kernel...";
+            std::cout.flush();
+        }
+        cl::Program program(
+            context,
+            std::string{ std::istreambuf_iterator<char>{ kernel_stream },
+                         std::istreambuf_iterator<char>{} });
 
+        // Query device and runtime capabilities.
         // If no -cl-std option is specified then the highest 1.x version
         // supported by each device is used to compile the program. Therefore,
         // it's only necessary to add the -cl-std option for 2.0 and 3.0 OpenCL
         // versions.
-        cl::string compiler_options =
-            cl::string{ d1_highest_device_opencl_c_is_2_x ? "-cl-std=CL2.0 "
-                                                          : "" }
-            + cl::string{ d1_highest_device_opencl_c_is_3_x ? "-cl-std=CL3.0 "
-                                                            : "" };
-        program1.build(dev1, compiler_options.c_str());
-        program2.build(dev2, compiler_options.c_str());
+        cl::string compiler_options;
+        constexpr int max_major_version = 3;
+        for (auto i = 2; i <= max_major_version; ++i)
+        {
+            std::string version_str = std::to_string(i) + "."; // "i."
+            std::string compiler_opt_str =
+                "-cl-std=CL" + std::to_string(i) + ".0 "; // -cl-std=CLi.0
 
-        // Query maximum workgroup size (WGS) of kernel supported on each device
-        // based on private mem (registers) constraints.
-        auto convolution1 =
-            cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
-                              cl_ulong>(program1, "convolution_3x3");
-        auto convolution2 =
-            cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
-                              cl_ulong>(program2, "convolution_3x3");
-        auto wgs1 = convolution1.getKernel()
-                        .getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(dev1);
-        auto wgs2 = convolution2.getKernel()
-                        .getWorkGroupInfo<CL_KERNEL_WORK_GROUP_SIZE>(dev2);
+            compiler_options += cl::string{ cl::util::opencl_c_version_contains(
+                                                dev, version_str)
+                                                ? compiler_opt_str
+                                                : "" };
+        }
+        program.build(subdevices, compiler_options.c_str());
 
         // Initialize host-side storage.
         constexpr cl_uint mask_dim = 3;
@@ -273,20 +205,14 @@ int main(int argc, char* argv[])
         const size_t pad_x_dim = x_dim + 2 * pad_width;
         const size_t pad_y_dim = y_dim + 2 * pad_width;
 
-        // Check that the WGSs can divide the global size (MacOS reports
-        // CL_INVALID_WORK_GROUP_SIZE otherwise). If WGS is smaller than the x
-        // dimension, then a NULL pointer will be used when initialising
-        // cl::EnqueueArgs for enqueuing the kernels.
-        if (pad_x_dim % wgs1 && pad_x_dim > wgs1)
-        {
-            size_t div = pad_x_dim / wgs1;
-            wgs1 = sqrt(div * wgs1);
-        }
+        const size_t input_size = pad_x_dim * pad_y_dim;
+        const size_t output_size = x_dim * y_dim;
+        const size_t mask_size = mask_dim * mask_dim;
 
-        if (pad_x_dim % wgs2 && pad_x_dim > wgs2)
+        if (diag_opts.verbose)
         {
-            size_t div = pad_x_dim / wgs2;
-            wgs2 = sqrt(div * wgs2);
+            std::cout << "done.\nInitializing host-side storage...";
+            std::cout.flush();
         }
 
         // Random number generator.
@@ -297,12 +223,12 @@ int main(int argc, char* argv[])
         // Initialize input matrix. The input will be padded to remove
         // conditional branches from the convolution kernel for determining
         // out-of-bounds.
-        std::vector<cl_float> h_input_grid(pad_x_dim * pad_y_dim);
+        std::vector<cl_float> h_input_grid(input_size);
         if (diag_opts.verbose)
         {
-            std::cout << "Generating " << x_dim * y_dim
-                      << " random numbers for convolution input grid."
-                      << std::endl;
+            std::cout << "\n  Generating " << output_size
+                      << " random numbers for convolution input grid...";
+            std::cout.flush();
         }
         cl::sdk::fill_with_random(prng, h_input_grid);
 
@@ -320,79 +246,145 @@ int main(int argc, char* argv[])
         }
 
         // Declare output matrix. Output will not be padded.
-        std::vector<cl_float> h_output_grid(x_dim * y_dim);
+        std::vector<cl_float> h_output_grid(output_size);
 
         // Initialize convolution mask.
-        std::vector<cl_float> h_mask(mask_dim * mask_dim);
+        std::vector<cl_float> h_mask(mask_size);
         if (diag_opts.verbose)
         {
-            std::cout << "Generating " << mask_dim * mask_dim
-                      << " random numbers for convolution mask." << std::endl;
+            std::cout << "done.  \nGenerating " << mask_size
+                      << " random numbers for convolution mask...";
+            std::cout.flush();
         }
         cl::sdk::fill_with_random(prng, h_mask);
 
-        // Initialize device-side storage.
+        // Create device buffers, from which we will create the subbuffers for
+        // the subdevices.
         const size_t grid_midpoint = y_dim / 2;
         const size_t pad_grid_midpoint = pad_y_dim / 2;
 
         if (diag_opts.verbose)
         {
-            std::cout << "Initializing device-side storage...";
+            std::cout << "done.\nInitializing device-side storage...";
             std::cout.flush();
         }
 
-        // Initialize queues for command execution on each device.
-        cl::CommandQueue queue1{ context1, dev1,
-                                 cl::QueueProperties::Profiling };
-        cl::CommandQueue queue2{ context2, dev2,
-                                 cl::QueueProperties::Profiling };
+        std::vector<cl_float> output_grid(output_size, 0);
+        cl::Buffer dev_input_grid(context,
+                                  CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                                  input_size, h_input_grid.data());
+        cl::Buffer dev_output_grid(context,
+                                   CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                                   output_size, output_grid.data() /*, nullptr*/);
+        cl::Buffer dev_mask(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                            mask_size, h_mask.data());
 
-        // First device performs the convolution in the upper half (middle
-        // border included).
-        cl::Buffer dev1_input_grid(
-            queue1, h_input_grid.begin(),
-            h_input_grid.begin() + pad_x_dim * (pad_grid_midpoint + 1), false);
+        if (diag_opts.verbose)
+        {
+            std::cout << "done.\nSetting up sub-devices...";
+            std::cout.flush();
+        }
 
-        // Second device performs the convolution in the lower half (middle
-        // border included).
-        cl::Buffer dev2_input_grid(
-            queue2, h_input_grid.begin() + pad_x_dim * (pad_grid_midpoint - 1),
-            h_input_grid.end(), false);
+        // Set up subdevices for kernel execution.
+        const size_t half_input_size = pad_x_dim * (pad_grid_midpoint + 1);
+        const size_t input_offset = pad_x_dim * (pad_grid_midpoint - 1);
+        const size_t half_output_size = x_dim * grid_midpoint;
 
-        cl::Buffer dev1_output_grid(queue1, h_output_grid.begin(),
-                                    h_output_grid.end(), false);
-        cl::Buffer dev2_output_grid(queue2, h_output_grid.begin(),
-                                    h_output_grid.end(), false);
+        std::vector<cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer,
+                                      cl_ulong, cl_ulong>>
+            convolutions{};
+        std::vector<cl::CommandQueue> sub_queues{};
+        std::vector<cl::Buffer> sub_input_grids{}, sub_output_grids{},
+            sub_masks{};
 
-        cl::Buffer dev1_mask{ queue1, h_mask.begin(), h_mask.end(), false };
-        cl::Buffer dev2_mask{ queue2, h_mask.begin(), h_mask.end(), false };
+        for (size_t i = 0; i < subdevices.size(); ++i)
+        {
+            auto subdevice = subdevices[i];
+
+            if (diag_opts.verbose)
+            {
+                std::cout
+                    << "\n  Creating kernel and command queue of sub-device "
+                    << i << "...";
+                std::cout.flush();
+            }
+
+            auto convolution =
+                cl::KernelFunctor<cl::Buffer, cl::Buffer, cl::Buffer, cl_ulong,
+                                  cl_ulong>(program, "convolution_3x3");
+
+            cl::CommandQueue queue(context, subdevice,
+                                   cl::QueueProperties::Profiling);
+
+            // Initialize device-side storage.
+            // First device performs the convolution in the upper half and
+            // second device in the lower half (middle borders included).
+            if (diag_opts.verbose)
+            {
+                std::cout << "done.\n  Initializing device-side storage of "
+                             "sub-device "
+                          << i << "...";
+                std::cout.flush();
+            }
+
+            cl_buffer_region input_region = { i * input_offset,
+                                              half_input_size },
+                             output_region = { i * half_output_size, half_output_size },
+                             mask_region = { 0, mask_size };
+
+            const cl_uint align =
+                subdevice.getInfo<CL_DEVICE_MEM_BASE_ADDR_ALIGN>();
+            if (input_region.origin % align || output_region.origin % align)
+            {
+                std::cerr << "Error: Memory should be aligned to "
+                          << subdevice.getInfo<CL_DEVICE_MEM_BASE_ADDR_ALIGN>()
+                          << std::endl;
+                exit(EXIT_FAILURE);
+            }
+
+            cl::Buffer sub_input_grid = dev_input_grid.createSubBuffer(
+                CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION, &input_region);
+            cl::Buffer sub_output_grid = dev_output_grid.createSubBuffer(
+                CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY,
+                CL_BUFFER_CREATE_TYPE_REGION, &output_region);
+            cl::Buffer sub_mask = dev_mask.createSubBuffer(
+                CL_MEM_READ_ONLY, CL_BUFFER_CREATE_TYPE_REGION, &mask_region);
+
+            if (diag_opts.verbose)
+            {
+                std::cout << "done.";
+                std::cout.flush();
+            }
+
+            sub_queues.push_back(queue);
+            convolutions.push_back(convolution);
+            sub_input_grids.push_back(sub_input_grid);
+            sub_output_grids.push_back(sub_output_grid);
+            sub_masks.push_back(sub_mask);
+        }
 
         // Launch kernels.
         if (diag_opts.verbose)
         {
-            std::cout << " done.\nExecuting on device... ";
+            std::cout << "\nExecuting on device... ";
             std::cout.flush();
         }
 
         // Initialize global and local buffers for device execution.
         const cl::NDRange global{ pad_x_dim, pad_y_dim };
-        const cl::NDRange local1{ wgs1, 1 };
-        const cl::NDRange local2{ wgs2, 1 };
 
         // Enqueue kernel calls and wait for them to finish.
         std::vector<cl::Event> dev1_kernel_runs;
         std::vector<cl::Event> dev2_kernel_runs;
         auto dev_start = std::chrono::high_resolution_clock::now();
 
-        dev1_kernel_runs.push_back(convolution1(
-            cl::EnqueueArgs{ queue1, global,
-                             (pad_x_dim < wgs1) ? cl::NullRange : local1 },
-            dev1_input_grid, dev1_output_grid, dev1_mask, x_dim,
+        dev1_kernel_runs.push_back(convolutions[0](
+            cl::EnqueueArgs{ sub_queues[0], global },
+            sub_input_grids[0], sub_output_grids[0], sub_masks[0], x_dim,
             grid_midpoint));
-        dev2_kernel_runs.push_back(convolution2(
-            cl::EnqueueArgs{ queue2, global,
-                             (pad_x_dim < wgs2) ? cl::NullRange : local2 },
-            dev2_input_grid, dev2_output_grid, dev2_mask, x_dim,
+        dev2_kernel_runs.push_back(convolutions[1](
+            cl::EnqueueArgs{ sub_queues[1], global },
+            sub_input_grids[1], sub_output_grids[1], sub_masks[1], x_dim,
             grid_midpoint));
 
         cl::WaitForEvents(dev1_kernel_runs);
@@ -412,14 +404,24 @@ int main(int argc, char* argv[])
 
         auto host_end = std::chrono::high_resolution_clock::now();
 
-        if (diag_opts.verbose) std::cout << "done." << std::endl;
+        if (diag_opts.verbose)
+        {
+            std::cout << "done." << std::endl;
+        }
 
         // Fetch and combine results from devices.
-        std::vector<cl_float> concatenated_results(x_dim * y_dim);
-        cl::copy(queue1, dev1_output_grid, concatenated_results.begin(),
-                 concatenated_results.begin() + x_dim * grid_midpoint);
-        cl::copy(queue2, dev2_output_grid,
-                 concatenated_results.begin() + x_dim * grid_midpoint,
+        std::vector<cl_float> concatenated_results(output_size);
+        // for (size_t i = 0; i < subdevices.size(); ++i)
+        // {
+        //     cl::copy(sub_queues[i], sub_output_grids[i],
+        //              concatenated_results.begin() + i * mid_output_count,
+        //              concatenated_results.end() - i * mid_output_count);
+        // }
+        cl::copy(sub_queues[0], sub_output_grids[0],
+                 concatenated_results.begin(),
+                 concatenated_results.begin() + half_output_size);
+        cl::copy(sub_queues[1], sub_output_grids[1],
+                 concatenated_results.begin() + half_output_size,
                  concatenated_results.end());
 
         // Validate device-side solution.
@@ -463,7 +465,8 @@ int main(int argc, char* argv[])
                           << " us." << std::endl;
             for (auto& pass : dev2_kernel_runs)
                 std::cout << "  - "
-                          << cl::util::get_duration<CL_PROFILING_COMMAND_START,
+                          <<
+                          cl::util::get_duration<CL_PROFILING_COMMAND_START,
                                                     CL_PROFILING_COMMAND_END,
                                                     std::chrono::microseconds>(
                                  pass)
