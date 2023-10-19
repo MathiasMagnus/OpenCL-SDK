@@ -15,21 +15,16 @@
  */
 
 kernel void convolution_3x3(const global float* in, global float* out,
-                            const global float* mask, const unsigned long x_dim,
-                            const unsigned long y_dim)
+                            const global float* mask, const uint2 out_dim)
 {
+    const uint2 gid = (uint2)(get_global_id(0), get_global_id(1));
+
     const uint mask_dim = 3;
     const uint pad_width = mask_dim / 2;
-
-    const size_t x = get_global_id(0);
-    const size_t y = get_global_id(1);
-
-    // Padded constants.
-    const size_t pad_x_dim = x_dim + 2 * pad_width;
-    const size_t pad_y_dim = y_dim + 2 * pad_width;
+    const uint2 in_dim = out_dim + (mask_dim / 2) * 2;
 
     // Check possible out of bounds.
-    if (!(x < x_dim && y < y_dim))
+    if (!(gid.x >= out_dim.x || gid.y >= out_dim.y))
     {
         return;
     }
@@ -40,20 +35,18 @@ kernel void convolution_3x3(const global float* in, global float* out,
     #if __OPENCL_C_VERSION__ >= 200
     __attribute__((opencl_unroll_hint))
     #endif
-    for (size_t grid_column = x, mask_column = 0; mask_column < mask_dim;
-         ++grid_column, ++mask_column)
+    for (uint y = 0 ; y < mask_dim; ++y)
     {
         #if __OPENCL_C_VERSION__ >= 200
         __attribute__((opencl_unroll_hint))
         #endif
-        for (size_t grid_row = y, mask_row = 0; mask_row < mask_dim;
-             ++grid_row, ++mask_row)
+        for (uint x = 0 ; x < mask_dim; ++x)
         {
-            result += mask[mask_column + mask_row * mask_dim]
-                * in[grid_column + grid_row * pad_x_dim];
+            result += mask[y * mask_dim + x]
+                * in[(gid.y + y) * in_dim.x + gid.x + x];
         }
     }
 
     // Write result to correspoding output cell.
-    out[x + y * x_dim] = result;
+    out[gid.y * out_dim.x + gid.x] = result;
 }

@@ -145,7 +145,7 @@ int main(int argc, char* argv[])
         cl_uint max_compute_units = dev.getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
         cl_device_partition_property subdevices_properties[] = {
             (cl_device_partition_property)CL_DEVICE_PARTITION_EQUALLY,
-            (cl_device_partition_property)max_compute_units / 2, 0
+            (cl_device_partition_property)(max_compute_units / 2), 0
         };
         std::vector<cl::Device> subdevices{};
         dev.createSubDevices(subdevices_properties, &subdevices);
@@ -233,14 +233,14 @@ int main(int argc, char* argv[])
         cl::sdk::fill_with_random(prng, h_input_grid);
 
         // Fill with 0s the extra rows and columns added for padding.
-        for (size_t j = 0; j < pad_x_dim; ++j)
+        for (size_t y = 0; y < pad_y_dim; ++y)
         {
-            for (size_t i = 0; i < pad_y_dim; ++i)
+            for (size_t x = 0; x < pad_x_dim; ++x)
             {
-                if (i == 0 || j == 0 || i == (pad_y_dim - 1)
-                    || j == (pad_x_dim - 1))
+                if (x == 0 || y == 0 || x == (pad_x_dim - 1)
+                    || y == (pad_y_dim - 1))
                 {
-                    h_input_grid[j + i * pad_x_dim] = 0;
+                    h_input_grid[y * pad_x_dim + x] = 0;
                 }
             }
         }
@@ -271,13 +271,13 @@ int main(int argc, char* argv[])
 
         std::vector<cl_float> output_grid(output_size, 0);
         cl::Buffer dev_input_grid(context,
-                                  CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                                  input_size, h_input_grid.data());
+                                  CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                  input_size * sizeof(cl_float), h_input_grid.data());
         cl::Buffer dev_output_grid(context,
-                                   CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                                   output_size, output_grid.data() /*, nullptr*/);
-        cl::Buffer dev_mask(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                            mask_size, h_mask.data());
+                                   CL_MEM_WRITE_ONLY | CL_MEM_ALLOC_HOST_PTR,
+                                   output_size * sizeof(cl_float), nullptr);
+        cl::Buffer dev_mask(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                            mask_size * sizeof(cl_float), h_mask.data());
 
         if (diag_opts.verbose)
         {
@@ -327,10 +327,10 @@ int main(int argc, char* argv[])
                 std::cout.flush();
             }
 
-            cl_buffer_region input_region = { i * input_offset,
-                                              half_input_size },
-                             output_region = { i * half_output_size, half_output_size },
-                             mask_region = { 0, mask_size };
+            cl_buffer_region input_region = { i * input_offset * sizeof(cl_float),
+                                              half_input_size * sizeof(cl_float) },
+                             output_region = { i * half_output_size * sizeof(cl_float), half_output_size * sizeof(cl_float) },
+                             mask_region = { 0, mask_size * sizeof(cl_float) };
 
             const cl_uint align =
                 subdevice.getInfo<CL_DEVICE_MEM_BASE_ADDR_ALIGN>();
@@ -371,11 +371,11 @@ int main(int argc, char* argv[])
         }
 
         // Initialize global and local buffers for device execution.
-        const cl::NDRange global{ pad_x_dim, pad_y_dim };
+        const cl::NDRange global{ x_dim, y_dim / 2 };
 
         // Enqueue kernel calls and wait for them to finish.
-        std::vector<cl::Event> dev1_kernel_runs;
-        std::vector<cl::Event> dev2_kernel_runs;
+        std::vector<cl::Event> dev1_kernel_runs; dev1_kernel_runs.reserve(1);
+        std::vector<cl::Event> dev2_kernel_runs; dev2_kernel_runs.reserve(1);
         auto dev_start = std::chrono::high_resolution_clock::now();
 
         dev1_kernel_runs.push_back(convolutions[0](
@@ -411,18 +411,7 @@ int main(int argc, char* argv[])
 
         // Fetch and combine results from devices.
         std::vector<cl_float> concatenated_results(output_size);
-        // for (size_t i = 0; i < subdevices.size(); ++i)
-        // {
-        //     cl::copy(sub_queues[i], sub_output_grids[i],
-        //              concatenated_results.begin() + i * mid_output_count,
-        //              concatenated_results.end() - i * mid_output_count);
-        // }
-        cl::copy(sub_queues[0], sub_output_grids[0],
-                 concatenated_results.begin(),
-                 concatenated_results.begin() + half_output_size);
-        cl::copy(sub_queues[1], sub_output_grids[1],
-                 concatenated_results.begin() + half_output_size,
-                 concatenated_results.end());
+        cl::copy(sub_queues.front(), dev_output_grid, concatenated_results.begin(), concatenated_results.end());
 
         // Validate device-side solution.
         cl_float deviation = 0.f;
