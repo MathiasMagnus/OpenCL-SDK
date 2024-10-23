@@ -17,7 +17,7 @@ cmake_minimum_required(VERSION 3.16)
 set(CMAKE_CXX_STANDARD 14)
 
 project(OpenCL-SDK
-  VERSION 2024.05.08
+  VERSION 2024.10.23
   LANGUAGES
     C CXX
 )
