@@ -80,6 +80,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         draft: true
+        token: ${{ secrets.ACTIONS_CREATE_RELEASE_TOKEN }}
         files: |
           package/OpenCL-SDK-${{github.ref_name}}-Win-${{matrix.BIN}}.zip
 
@@ -151,6 +152,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         draft: true
+        token: ${{ secrets.ACTIONS_CREATE_RELEASE_TOKEN }}
         files: |
           package/OpenCL-SDK-${{github.ref_name}}-Source.*
           package-deb/OpenCL-SDK-${{github.ref_name}}-Source.*
