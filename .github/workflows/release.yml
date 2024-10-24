@@ -133,6 +133,7 @@ jobs:
         --config "${env:GITHUB_WORKSPACE}/build/CPackSourceConfig.cmake" `
         -G DEB `
         -C Release `
+        -D CPACK_PACKAGE_FILE_NAME='OpenCL-SDK-${{github.ref_name}}-Source' `
         -B "${env:GITHUB_WORKSPACE}/package-deb"
         if ($LASTEXITCODE -ne 0) { throw "Packaging OpenCL-SDK deb failed." }
 
