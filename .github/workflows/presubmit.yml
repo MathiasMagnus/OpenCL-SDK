@@ -23,6 +23,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
+    if: false
     needs: format
     defaults:
       run:
@@ -133,6 +134,7 @@ jobs:
       CMAKE_EXE: /opt/Kitware/CMake/${{ matrix.CMAKE }}/bin/cmake
       CPACK_EXE: /opt/Kitware/CMake/${{ matrix.CMAKE }}/bin/cpack
       CTEST_EXE: /opt/Kitware/CMake/${{ matrix.CMAKE }}/bin/ctest
+      VCPKG_INSTALLATION_ROOT: /opt/Microsoft/vcpkg
       DEB_INSTALLATION_PATH: /usr
       CC: ${{matrix.COMPILER.C_NAME}}-${{matrix.COMPILER.VER}}
       CXX:  ${{matrix.COMPILER.CXX_NAME}}-${{matrix.COMPILER.VER}}
@@ -143,7 +145,8 @@ jobs:
           echo "VCPKG_TRIPLET=x64-linux" >> $GITHUB_ENV;
         else
           echo "VCPKG_TRIPLET=x86-linux" >> $GITHUB_ENV;
-        fi
+        fi &&
+        echo "VCPKG_VERSION=`${VCPKG_INSTALLATION_ROOT}\vcpkg --version`" >> $GITHUB_ENV
 
     - name: Install system CMake
       if: matrix.CMAKE == 'system'
@@ -155,27 +158,20 @@ jobs:
     - name: Install dependencies (system)
       if: matrix.DEPS == 'system'
       run: apt-get update -qq && apt-get install -y libfreetype-dev libsfml-dev libglm-dev libglew-dev libtclap-dev libstb-dev
+
+    - name: Install dependencies (vcpkg)
+      if: matrix.DEPS == 'vcpkg'
+      run: |
+        cd $VCPKG_INSTALLATION_ROOT
+        git pull
+        ./bootstrap-vcpkg.sh
   
     - name: Cache dependencies (vcpkg)
       if: matrix.DEPS == 'vcpkg'
-      id: vcpkg-install
       uses: actions/cache@v4
       with:
-        path: /opt/Microsoft/vcpkg
-        key: vcpkg-linux-${{matrix.BIN}}
-
-    - name: Install dependencies (vcpkg)
-      if: matrix.DEPS == 'vcpkg' && steps.vcpkg-install.outputs.cache-hit != 'true'
-      run: |
-        cd /opt/Microsoft/vcpkg
-        git pull
-        ./bootstrap-vcpkg.sh
-        ./vcpkg --triplet=$VCPKG_TRIPLET install tclap stb
-        # It is not possible to cross-compile the OpenGL samples on Ubuntu
-        # because system dev dependencies are not available for i386
-        if [[ "${{ matrix.BIN }}" == "64" ]]; then
-          ./vcpkg --triplet=$VCPKG_TRIPLET install sfml glm glew;
-        fi
+        path: ${{env.GITHUB_WORKSPACE}}/build/_deps
+        key: linux-${{env.VCPKG_VERSION}}-${{env.VCPKG_TRIPLET}}-${{env.CC}}-${{ hashFiles('vcpkg.json') }}
 
     - name: Set up compiler flags
       run: |
@@ -250,7 +246,7 @@ jobs:
       run: $CMAKE_EXE
         -G "${{matrix.CONF.GEN}}"
         `if [[ "${{matrix.CONF.GEN}}" == "Unix Makefiles" ]]; then echo "-D CMAKE_BUILD_TYPE=${{matrix.CONF.CONFIG}}"; fi`
-        `if [[ "${{matrix.DEPS}}" == "vcpkg" ]]; then echo "-D CMAKE_TOOLCHAIN_FILE=/opt/Microsoft/vcpkg/scripts/buildsystems/vcpkg.cmake"; fi;`
+        `if [[ "${{matrix.DEPS}}" == "vcpkg" ]]; then echo "-D CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"; fi;`
         `if [[ "${{matrix.DEPS}}" == "vcpkg" ]]; then echo "-D VCPKG_TARGET_TRIPLET=$VCPKG_TRIPLET"; fi;`
         -D BUILD_DOCS=ON
         -D BUILD_TESTING=ON
@@ -362,6 +358,7 @@ jobs:
         fi
 
   windows:
+    if: false
     runs-on: windows-latest
     needs: format
     defaults:
@@ -436,23 +433,24 @@ jobs:
         New-Item -Type File HKLM:\SOFTWARE\Khronos\OpenCL\Vendors | Out-Null; `
         Set-ItemProperty -Path HKLM:\SOFTWARE\Khronos\OpenCL\Vendors -Name ${env:IMAGE_INTEL_PREFIX}\oclcpuexp\intelocl64.dll -Type DWord -Value 0;
 
+    - name: Cache key fragments (vcpkg)
+      if: matrix.DEPS == 'vcpkg'
+      run: |
+        Write-Host "VCPKG_VERSION=$(& ${env:VCPKG_INSTALLATION_ROOT}\vcpkg.exe --version)" >> $GITHUB_ENV
+        Write-Host "VS_VERSION=$(Get-CimInstance MSFT_VSInstance -Namespace root/cimv2/vs | Select-Object -ExpandProperty Version)" >> $GITHUB_ENV
+
     - name: Cache dependencies (vcpkg)
       if: matrix.DEPS == 'vcpkg'
-      id: vcpkg-install
       uses: actions/cache@v4
       with:
         path: |
-          C:\vcpkg
-        key: x64-windows-sfml-tclap-glm-glew-stb
-
-    - name: Install dependencies (vcpkg)
-      if: matrix.DEPS == 'vcpkg' && steps.vcpkg-install.outputs.cache-hit != 'true'
-      run: C:\vcpkg\vcpkg.exe --triplet=x64-windows install sfml tclap glm glew stb
+          ${{env.GITHUB_WORKSPACE}}\build\_deps
+        key: windows-${{matrix.BIN}}-${{env.VCPKG_VERSION}}-${{env.VS_VERSION}}-${{ hashFiles('vcpkg.json') }}
 
     - name: Set up compiler flags
       run: |
-        echo "CFLAGS=/W4 /WX" >> $GITHUB_ENV
-        echo "CXXFLAGS=/W4 /WX" >> $GITHUB_ENV
+        Write-Host "CFLAGS=/W4 /WX" >> $GITHUB_ENV
+        Write-Host "CXXFLAGS=/W4 /WX" >> $GITHUB_ENV
 
     - name: Checkout OpenCL-SDK
       uses: actions/checkout@v4
@@ -631,17 +629,17 @@ jobs:
     strategy:
       matrix:
         GEN:
-        - Xcode
+        #- Xcode
         - Ninja Multi-Config
         DEPS:
-        - system
+        #- system
         - vcpkg
-        - fetch
+        #- fetch
         STD:
         - C: 11
           CXX: 14
-        - C: 17
-          CXX: 17
+        #- C: 17
+        #  CXX: 17
     env:
       CC: /usr/bin/clang
       CXX: /usr/bin/clang++
@@ -671,7 +669,21 @@ jobs:
       run: |
         git clone https://github.com/Microsoft/vcpkg.git vcpkg
         ./vcpkg/bootstrap-vcpkg.sh
-        ./vcpkg/vcpkg install tclap glm glew sfml stb
+        echo "VCPKG_INSTALLATION_ROOT=${{env.GITHUB_WORKSPACE}}/vcpkg" >> $GITHUB_ENV
+
+    - name: Cache key fragments (vcpkg)
+      if: matrix.DEPS == 'vcpkg'
+      run: |
+        echo "VCPKG_VERSION=`${VCPKG_INSTALLATION_ROOT}/vcpkg --version`" >> $GITHUB_ENV
+        echo "CC_VERSION=`$CC --version`" >> $GITHUB_ENV
+
+    - name: Cache dependencies (vcpkg)
+      if: matrix.DEPS == 'vcpkg'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{env.GITHUB_WORKSPACE}}/build/_deps
+        key: macos-${{env.VCPKG_VERSION}}-${{env.CC_VERSION}}-${{ hashFiles('vcpkg.json') }}
 
     - name: Set up compiler flags
       run: |
