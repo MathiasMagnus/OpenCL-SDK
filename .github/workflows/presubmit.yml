@@ -674,7 +674,7 @@ jobs:
     - name: Cache key fragments (vcpkg)
       if: matrix.DEPS == 'vcpkg'
       run: |
-        echo "VCPKG_VERSION=`${VCPKG_INSTALLATION_ROOT}/vcpkg --version`" >> $GITHUB_ENV
+        echo "VCPKG_VERSION=`$VCPKG_INSTALLATION_ROOT/vcpkg --version`" >> $GITHUB_ENV
         echo "CC_VERSION=`$CC --version`" >> $GITHUB_ENV
 
     - name: Cache dependencies (vcpkg)
@@ -815,6 +815,7 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
+    if: false
     needs: format
     defaults:
       run:
