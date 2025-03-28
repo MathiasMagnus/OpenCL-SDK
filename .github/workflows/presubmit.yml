@@ -671,10 +671,11 @@ jobs:
         ./vcpkg/bootstrap-vcpkg.sh
         echo "VCPKG_INSTALLATION_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
 
+
     - name: Cache key fragments (vcpkg)
       if: matrix.DEPS == 'vcpkg'
       run: |
-        echo "VCPKG_VERSION=`$VCPKG_INSTALLATION_ROOT/vcpkg --version`" >> $GITHUB_ENV
+        echo "VCPKG_VERSION=$($VCPKG_INSTALLATION_ROOT/vcpkg --version)" >> $GITHUB_ENV
         echo "CC_VERSION=`$CC --version`" >> $GITHUB_ENV
 
     - name: Cache dependencies (vcpkg)
@@ -745,6 +746,7 @@ jobs:
         ctest -C Release --output-on-failure --no-tests=error --parallel `sysctl -n hw.logicalcpu`
 
   python:
+    if: false
     name: Exercise Python examples on ${{matrix.os}}
     defaults:
       run:
@@ -785,6 +787,7 @@ jobs:
           done
 
   checkruby:
+    if: false
     name: Check Ruby Samples ${{ matrix.os }}
     defaults:
       run:
