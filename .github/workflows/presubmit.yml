@@ -669,7 +669,7 @@ jobs:
       run: |
         git clone https://github.com/Microsoft/vcpkg.git vcpkg
         ./vcpkg/bootstrap-vcpkg.sh
-        echo "VCPKG_INSTALLATION_ROOT=${{env.GITHUB_WORKSPACE}}/vcpkg" >> $GITHUB_ENV
+        echo "VCPKG_INSTALLATION_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
 
     - name: Cache key fragments (vcpkg)
       if: matrix.DEPS == 'vcpkg'
